@@ -64,6 +64,7 @@ pub use error::Error;
 pub use events::{
     ContractUpgraded, Debit, Deposit, DepositCapSet, DepositFor, ReserveSet, Withdraw, WithdrawTo,
 };
+pub use payflow_shared::ContractHealth;
 pub use types::{DataKey, OperationWindow, SpendLimit, SpendWindow, UpgradeRecord};
 
 use soroban_sdk::{
@@ -92,11 +93,11 @@ pub const MAX_VAULT_OPERATIONS_PER_WINDOW: u32 = 8;
 #[allow(missing_docs)]
 mod contract {
     use super::{
-        contract, contractimpl, token, Address, BytesN, ContractExecutable, ContractUpgraded,
-        DataKey, Debit, Deposit, DepositCapSet, DepositFor, Env, Error, OperationWindow,
-        ReserveSet, SpendLimit, SpendWindow, String, UpgradeRecord, Withdraw, WithdrawTo,
-        INSTANCE_BUMP, INSTANCE_THRESHOLD, MAX_VAULT_OPERATIONS_PER_WINDOW, PERSIST_BUMP,
-        PERSIST_THRESHOLD, VAULT_OPERATION_WINDOW_SECS,
+        contract, contractimpl, token, Address, BytesN, ContractExecutable, ContractHealth,
+        ContractUpgraded, DataKey, Debit, Deposit, DepositCapSet, DepositFor, Env, Error,
+        OperationWindow, ReserveSet, SpendLimit, SpendWindow, String, UpgradeRecord, Withdraw,
+        WithdrawTo, INSTANCE_BUMP, INSTANCE_THRESHOLD, MAX_VAULT_OPERATIONS_PER_WINDOW,
+        PERSIST_BUMP, PERSIST_THRESHOLD, VAULT_OPERATION_WINDOW_SECS,
     };
 
     /// Custody for subscriber funds.
@@ -114,6 +115,18 @@ mod contract {
         /// The version of this contract's crate.
         pub fn version(env: Env) -> String {
             String::from_str(&env, env!("CARGO_PKG_VERSION"))
+        }
+
+        /// Read-only deployment identity and wiring information.
+        pub fn health(env: Env) -> ContractHealth {
+            let subscription = env.storage().instance().get(&DataKey::Subscription);
+            ContractHealth {
+                version: String::from_str(&env, env!("CARGO_PKG_VERSION")),
+                registry: None,
+                vault: Some(env.current_contract_address()),
+                subscription,
+                token: None,
+            }
         }
 
         /// Runs once, in the same transaction that deploys the contract. With a

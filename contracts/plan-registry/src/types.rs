@@ -100,6 +100,9 @@ pub enum DataKey {
     /// Ordered list of contract upgrades: (version, ledger, `wasm_hash`).
     /// Append-only; the initial deployment is not recorded.
     UpgradeHistory,
+    /// Minimum number of billing periods a subscriber must complete before
+    /// cancellation is allowed (#260). Missing means zero.
+    PlanMinimumCommitment(u64),
 }
 
 /// A single contract upgrade record.

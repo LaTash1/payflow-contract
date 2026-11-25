@@ -36,7 +36,7 @@ The Rust enums remain the source of truth: [plan-registry errors](../contracts/p
 | 1022 | `EmptyBatch` | A batch operation was submitted without items. |
 | 1023 | `BatchTooLarge` | A batch exceeds the contract's maximum size. |
 
-## Subscription (2001–2039)
+## Subscription (2001–2040)
 
 | Code | Variant | Returned when |
 | --- | --- | --- |
@@ -79,6 +79,7 @@ The Rust enums remain the source of truth: [plan-registry errors](../contracts/p
 | 2037 | `VaultCallFailed` | A call to the vault contract failed. |
 | 2038 | `PlanChargesPaused` | Charges are paused for the referenced plan. |
 | 2039 | `ProtocolPaused` | Protocol-wide operations are paused. |
+| 2040 | `MinimumCommitmentNotMet` | Cancellation or a mandate cap would end the mandate before its minimum committed number of billing periods. |
 
 ## Vault (3001–3015)
 

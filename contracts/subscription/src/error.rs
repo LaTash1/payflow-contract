@@ -111,6 +111,9 @@ pub enum Error {
     /// and plan upgrades are refused until it is resumed; reads,
     /// cancellations, refunds and vault withdrawals are unaffected.
     ProtocolPaused = 2039,
+    /// Cancellation, an upgrade, or a mandate cap would prevent the mandate
+    /// from completing its frozen minimum number of billing periods.
+    MinimumCommitmentNotMet = 2040,
 }
 
 impl From<Error> for ErrorCode {

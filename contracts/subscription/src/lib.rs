@@ -13,9 +13,9 @@
 //! | Entry point | Instance reads | Instance writes | Persistent reads | Persistent writes | Notes |
 //! |---|---|---|---|---|---|
 //! | `__constructor` | 0 | 6 (config keys) | 0 | 0 | Extends instance TTL |
-//! | `subscribe` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–6 (Mandate, 3 index slots, 1 count, optional grace) | Plus registry grace read; extends TTLs |
-//! | `subscribe_at` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–6 (Mandate, 3 index slots, 1 count, optional grace) | Plus registry grace read; extends TTLs |
-//! | `subscribe_with_deposit` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–6 (Mandate, 3 index slots, 1 count, optional grace) | Plus registry grace read and vault deposit; extends TTLs |
+//! | `subscribe` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–7 (Mandate, 3 index slots, 1 count, optional grace; commitment is in Mandate) | Plus registry grace and commitment reads; extends TTLs |
+//! | `subscribe_at` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–7 (Mandate, 3 index slots, 1 count, optional grace; commitment is in Mandate) | Plus registry grace and commitment reads; extends TTLs |
+//! | `subscribe_with_deposit` | 4 (config) | 1 (NextMandateId) | 1 (Plan) | 4–7 (Mandate, 3 index slots, 1 count, optional grace; commitment is in Mandate) | Plus registry grace and commitment reads and vault deposit; extends TTLs |
 //! | `charge` | 4 (config) | 0 | 2–4 (Mandate, Plan, Vault balance) | 2–3 (Mandate, Vault balance) | Vault debit; extends persistent TTLs |
 //! | `upgrade` | 4 (config) | 0 | 2–4 (Mandate, Plan, pause view) | 2–3 (Mandate, index slots) | Extends persistent TTLs; vault debit if prorated |
 //! | `cancel` / `cancel_with_reason` | 0 | 0 | 1 (Mandate) | 1–2 (Mandate, index) | Extends persistent TTL |
@@ -37,8 +37,10 @@
 //! | `quote_charge` | 0 | 0 | 1–2 (Mandate, Plan) | 0 | |
 //! | `is_in_grace_period` | 0 | 0 | 1–2 (Mandate, MandateGracePeriod) | 0 | |
 //! | `mandate_grace_period` | 0 | 0 | 2 (Mandate, MandateGracePeriod) | 0 | |
+//! | `mandate_minimum_commitment` | 0 | 0 | 1 (Mandate) | 0 | |
 //! | `due_mandates` | 0 | 0 | ≤100 (index + Mandates) | 0 | Page ≤50 |
 //! | `committed_per_period` | 0 | 0 | ≤50 (index + Mandates) | 0 | Page ≤50 |
+//! | `plan_committed_per_period` | 0 | 0 | 1 (PlanCommittedRevenue) | 0 | |
 //! | `subscriber_mandate_count` | 0 | 0 | 1 (count) | 0 | |
 //! | `subscriber_mandates` | 0 | 0 | ≤50 (index) | 0 | Page ≤50 |
 //! | `subscriber_mandate_summaries` | 0 | 0 | ≤100 (index + Mandates) | 0 | Page ≤50 |
@@ -87,8 +89,8 @@ pub use events::{
 };
 pub use interfaces::{PlanRegistryClient, VaultClient};
 pub use types::{
-    ChargeQuote, ChargeResult, DataKey, EstimatedEnd, Mandate, MandateStatus, MandateSummary, Plan,
-    UpgradeRecord,
+    ChargeQuote, ChargeResult, ContractHealth, DataKey, EstimatedEnd, Mandate, MandateStatus,
+    MandateSummary, Plan, UpgradeRecord,
 };
 
 use payflow_shared::{MAX_KEEPER_BPS, MAX_REFERRAL_BPS};
@@ -152,13 +154,13 @@ pub const SECONDS_PER_LEDGER: u64 = 5;
 mod contract {
     use super::{
         contract, contractimpl, token, Address, BytesN, Cancelled, ChargeFailed, ChargeQuote,
-        ChargeResult, Charged, CommittedRevenueChanged, ContractExecutable, ContractUpgraded,
-        DataKey, Env, Error, EstimatedEnd, FeeChanged, Mandate, MandateCompleted, MandateEnded,
-        MandateStatus, MandateSummary, MandateTransferred, MandateUpdated, MaxChargesChanged,
-        PauseChanged, Plan, PlanRegistryClient, ProtocolPauseChanged, Refunded, SeatsChanged,
-        String, Subscribed, UpgradeRecord, Upgraded, VaultClient, Vec, BPS_DENOMINATOR,
-        CANCEL_REASON_NONE, INSTANCE_BUMP, INSTANCE_THRESHOLD, MAX_CANCEL_REASON, MAX_FEE_BPS,
-        MAX_KEEPER_BPS, MAX_PAGE, MAX_REFERRAL_BPS, MAX_START_OFFSET, PERSIST_BUMP,
+        ChargeResult, Charged, CommittedRevenueChanged, ContractExecutable, ContractHealth,
+        ContractUpgraded, DataKey, Env, Error, EstimatedEnd, FeeChanged, Mandate, MandateCompleted,
+        MandateEnded, MandateStatus, MandateSummary, MandateTransferred, MandateUpdated,
+        MaxChargesChanged, PauseChanged, Plan, PlanRegistryClient, ProtocolPauseChanged, Refunded,
+        SeatsChanged, String, Subscribed, UpgradeRecord, Upgraded, VaultClient, Vec,
+        BPS_DENOMINATOR, CANCEL_REASON_NONE, INSTANCE_BUMP, INSTANCE_THRESHOLD, MAX_CANCEL_REASON,
+        MAX_FEE_BPS, MAX_KEEPER_BPS, MAX_PAGE, MAX_REFERRAL_BPS, MAX_START_OFFSET, PERSIST_BUMP,
         PERSIST_THRESHOLD, SECONDS_PER_LEDGER,
     };
 
@@ -170,7 +172,7 @@ mod contract {
     /// `charge` when the mandate falls due. The mandate is the only thing standing
     /// between a merchant and a subscriber's balance, and it is bounded on every
     /// axis the subscriber cares about: fixed amount, fixed period, capped count,
-    /// and cancellable at any time.
+    /// and cancellable after any minimum commitment frozen into the mandate.
     #[contract]
     pub struct Subscription;
 
@@ -179,6 +181,19 @@ mod contract {
         /// The version of this contract's crate.
         pub fn version(env: Env) -> String {
             String::from_str(&env, env!("CARGO_PKG_VERSION"))
+        }
+
+        /// Read-only deployment identity and linked contract addresses.
+        pub fn health(env: Env) -> Result<ContractHealth, Error> {
+            let registry = Self::cfg_address(&env, DataKey::PlanRegistry)?;
+            let vault = Self::cfg_address(&env, DataKey::Vault)?;
+            Ok(ContractHealth {
+                version: String::from_str(&env, env!("CARGO_PKG_VERSION")),
+                registry: Some(registry),
+                vault: Some(vault),
+                subscription: None,
+                token: None,
+            })
         }
 
         /// Runs once, in the same transaction that deploys the contract. With a
@@ -230,6 +245,8 @@ mod contract {
         ///
         /// # Errors
         /// Returns [`Error::InvalidMaxTotal`] if `max_total < 0`,
+        /// [`Error::MinimumCommitmentNotMet`] if `max_charges` or `max_total`
+        /// would let this mandate end before its plan's commitment,
         /// [`Error::PlanInactive`] if the target plan is inactive, or
         /// [`Error::NotInitialized`] if configuration keys are missing.
         pub fn subscribe(
@@ -329,7 +346,9 @@ mod contract {
         /// # Errors
         /// Returns [`Error::InvalidStart`] if `start` is before the current
         /// ledger timestamp or more than `MAX_START_OFFSET` after it,
-        /// [`Error::InvalidMaxTotal`] if `max_total < 0`, [`Error::PlanInactive`]
+        /// [`Error::InvalidMaxTotal`] if `max_total < 0`,
+        /// [`Error::MinimumCommitmentNotMet`] if `max_charges` or `max_total`
+        /// would let this mandate end before its plan's commitment, [`Error::PlanInactive`]
         /// if the target plan is inactive, or [`Error::NotInitialized`] if
         /// configuration keys are missing.
         pub fn subscribe_at(
@@ -407,6 +426,19 @@ mod contract {
             // re-read it, so later plan edits cannot shorten a window an open
             // mandate was promised (#312).
             let grace_period_secs = Self::read_plan_grace_period(&env, &registry, plan_id)?;
+            let minimum_commitment = Self::read_plan_minimum_commitment(&env, &registry, plan_id)?;
+            if minimum_commitment != 0 {
+                if max_charges != 0 && max_charges < minimum_commitment {
+                    return Err(Error::MinimumCommitmentNotMet);
+                }
+                let minimum_total = plan
+                    .amount
+                    .checked_mul(i128::from(minimum_commitment))
+                    .ok_or(Error::AmountOverflow)?;
+                if max_total != 0 && max_total < minimum_total {
+                    return Err(Error::MinimumCommitmentNotMet);
+                }
+            }
 
             let fee_bps: u32 = env
                 .storage()
@@ -448,6 +480,7 @@ mod contract {
                 payout: plan.payout.clone(),
                 referrer: referrer.clone(),
                 referral_bps,
+                minimum_commitment,
                 status: MandateStatus::Active,
             };
 
@@ -507,6 +540,7 @@ mod contract {
                 keeper_bps,
                 referrer,
                 referral_bps,
+                minimum_commitment,
             }
             .publish(&env);
 
@@ -813,6 +847,15 @@ mod contract {
             Ok(Self::read_grace_period(&env, mandate_id))
         }
 
+        /// Minimum committed billing periods frozen into `mandate_id` when it
+        /// was opened. Existing mandates from before this setting default to 0.
+        ///
+        /// # Errors
+        /// Returns [`Error::MandateNotFound`] if the mandate does not exist.
+        pub fn mandate_minimum_commitment(env: Env, mandate_id: u64) -> Result<u32, Error> {
+            Ok(Self::read_mandate(&env, mandate_id)?.minimum_commitment)
+        }
+
         /// Whether `mandate_id` is inside the grace window it was opened with
         /// (#312), so a wallet can warn the subscriber before the mandate
         /// lapses.
@@ -914,6 +957,20 @@ mod contract {
             let old_plan_id = mandate.plan_id;
             let old_amount = mandate.amount;
             let old_period = mandate.period;
+
+            let remaining_commitment = mandate
+                .minimum_commitment
+                .saturating_sub(mandate.charges_made);
+            if mandate.max_total != 0 && remaining_commitment != 0 {
+                let minimum_remaining_total = plan
+                    .amount
+                    .checked_mul(i128::from(remaining_commitment))
+                    .and_then(|amount| mandate.total_spent.checked_add(amount))
+                    .ok_or(Error::AmountOverflow)?;
+                if minimum_remaining_total > mandate.max_total {
+                    return Err(Error::MinimumCommitmentNotMet);
+                }
+            }
 
             // Moving to a different plan takes a seat there; refuse if that plan
             // is at its cap (#158). Same-plan "upgrades" keep their seat.
@@ -1023,8 +1080,8 @@ mod contract {
             Ok(())
         }
 
-        /// Terminate a mandate permanently. Only the subscriber may do this, and it
-        /// can be done at any time without the merchant's involvement.
+        /// Terminate a mandate permanently. Only the subscriber may do this, and
+        /// it is allowed once the mandate's minimum commitment has been met.
         ///
         /// This is [`Subscription::cancel_with_reason`] with
         /// [`CANCEL_REASON_NONE`]: the mandate is cancelled exactly as before and
@@ -1038,8 +1095,9 @@ mod contract {
         ///
         /// # Errors
         /// Returns [`Error::MandateNotFound`] if the mandate does not exist,
-        /// [`Error::NotSubscriber`] if the caller is not the subscriber, or
-        /// [`Error::MandateNotActive`] if the mandate is already cancelled or completed.
+        /// [`Error::NotSubscriber`] if the caller is not the subscriber,
+        /// [`Error::MandateNotActive`] if the mandate is already cancelled or completed,
+        /// or [`Error::MinimumCommitmentNotMet`] if its committed periods have not elapsed.
         pub fn cancel(env: Env, subscriber: Address, mandate_id: u64) -> Result<(), Error> {
             Self::cancel_with_reason(env, subscriber, mandate_id, CANCEL_REASON_NONE)
         }
@@ -1074,8 +1132,9 @@ mod contract {
         /// # Errors
         /// Returns [`Error::InvalidCancelReason`] if `reason > MAX_CANCEL_REASON`,
         /// [`Error::MandateNotFound`] if the mandate does not exist,
-        /// [`Error::NotSubscriber`] if the caller is not the subscriber, or
-        /// [`Error::MandateNotActive`] if the mandate is already cancelled or completed.
+        /// [`Error::NotSubscriber`] if the caller is not the subscriber,
+        /// [`Error::MandateNotActive`] if the mandate is already cancelled or completed, or
+        /// [`Error::MinimumCommitmentNotMet`] if its committed periods have not elapsed.
         pub fn cancel_with_reason(
             env: Env,
             subscriber: Address,
@@ -1098,6 +1157,9 @@ mod contract {
                 || mandate.status == MandateStatus::Completed
             {
                 return Err(Error::MandateNotActive);
+            }
+            if mandate.charges_made < mandate.minimum_commitment {
+                return Err(Error::MinimumCommitmentNotMet);
             }
 
             mandate.status = MandateStatus::Cancelled;
@@ -1794,7 +1856,8 @@ mod contract {
         /// full page within the 100-entry transaction limit.
         ///
         /// Mandates already cancelled or completed are skipped, so calling it
-        /// twice is harmless. Returns how many this call cancelled. Each
+        /// twice is harmless. Open mandates whose minimum commitment has not
+        /// been met are also skipped. Returns how many this call cancelled. Each
         /// [`Cancelled`] event reports reason [`CANCEL_REASON_NONE`]: a
         /// subscriber who clears out everything is not explaining one by one.
         ///
@@ -1826,6 +1889,9 @@ mod contract {
                 if mandate.status == MandateStatus::Cancelled
                     || mandate.status == MandateStatus::Completed
                 {
+                    continue;
+                }
+                if mandate.charges_made < mandate.minimum_commitment {
                     continue;
                 }
 
@@ -2039,15 +2105,22 @@ mod contract {
             Self::plan_open_count(&env, plan_id)
         }
 
-        /// Committed revenue per period for `plan_id`. This is the sum of all
-        /// active mandates' per-period amounts, normalized to the plan's billing
-        /// period. Returns 0 if the plan has no active mandates or does not exist.
+        /// Committed revenue per period for `plan_id`. This is the sum of active
+        /// mandates' per-period amounts, normalized to the plan's billing period.
+        /// Returns 0 if the plan has no active mandates or does not exist.
         pub fn plan_committed_revenue(env: Env, plan_id: u64) -> i128 {
             Self::read_committed_revenue(&env, plan_id)
         }
 
+        /// Committed amount per period for `plan_id`, normalized to that plan's
+        /// billing period. Returns 0 when there are no active mandates.
+        pub fn plan_committed_per_period(env: Env, plan_id: u64) -> i128 {
+            Self::read_committed_revenue(&env, plan_id)
+        }
+
         /// Raise or lower a mandate's `max_charges` (0 = unlimited). Only the
-        /// subscriber may change it, and not below the charges already made.
+        /// subscriber may change it, and not below the charges already made or
+        /// the mandate's frozen minimum commitment.
         /// Reaching the new cap completes the mandate and releases its seat.
         /// (From #158.)
         pub fn set_max_charges(
@@ -2067,6 +2140,9 @@ mod contract {
             }
             if max_charges != 0 && max_charges < mandate.charges_made {
                 return Err(Error::InvalidMaxCharges);
+            }
+            if max_charges != 0 && max_charges < mandate.minimum_commitment {
+                return Err(Error::MinimumCommitmentNotMet);
             }
 
             mandate.max_charges = max_charges;
@@ -2282,6 +2358,17 @@ mod contract {
         ) -> Result<u64, Error> {
             match PlanRegistryClient::new(env, registry).try_plan_grace_period(&plan_id) {
                 Ok(Ok(seconds)) => Ok(seconds),
+                _ => Err(Error::PlanNotFound),
+            }
+        }
+
+        fn read_plan_minimum_commitment(
+            env: &Env,
+            registry: &Address,
+            plan_id: u64,
+        ) -> Result<u32, Error> {
+            match PlanRegistryClient::new(env, registry).try_plan_minimum_commitment(&plan_id) {
+                Ok(Ok(periods)) => Ok(periods),
                 _ => Err(Error::PlanNotFound),
             }
         }

@@ -15,6 +15,9 @@ pub trait PlanRegistryInterface {
 
     /// Grace window for new mandates against this plan (#312).
     fn plan_grace_period(env: Env, plan_id: u64) -> u64;
+
+    /// Minimum number of completed billing periods required before cancellation.
+    fn plan_minimum_commitment(env: Env, plan_id: u64) -> u32;
 }
 
 /// Debit side of `payflow-vault`.
