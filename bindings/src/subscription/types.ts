@@ -188,8 +188,16 @@ export const Error = {
   /**
    * Cancellation, an upgrade, or a mandate cap would prevent the mandate
    * from completing its frozen minimum number of billing periods.
+   * A refund transfer did not deliver exactly the recorded refund amount,
+   * so the token is unsafe for exact-amount accounting (for example a
+   * fee-on-transfer token). The refund is rolled back.
    */
-  2040 : { message: "MinimumCommitmentNotMet" }
+  2040 : { message: "UnexpectedTransferAmount" },
+  /**
+   * Cancellation, an upgrade, or a mandate cap would prevent the mandate
+   * from completing its frozen minimum number of billing periods.
+   */
+  2041 : { message: "MinimumCommitmentNotMet" }
 }
 
 /**
@@ -484,6 +492,64 @@ export interface MandateSummary {
   status: MandateStatus;
   /**
    * Token contract address in which payments are denominated.
+   */
+  token: string;
+}
+
+/**
+ * Exact settlement recipients and amounts for a prospective charge.
+ */
+export interface ChargeSimulation {
+  /**
+   * Total amount debited from the subscriber.
+   */
+  amount: bigint;
+  /**
+   * Whether timing, status, caps and configured pauses permit charging now.
+   */
+  chargeable: boolean;
+  /**
+   * Unix seconds at which the charge is due.
+   */
+  due_at: bigint;
+  /**
+   * Protocol fee.
+   */
+  fee: bigint;
+  /**
+   * Address receiving the protocol fee.
+   */
+  fee_to: string;
+  /**
+   * Proposed keeper address and recipient of any tip.
+   */
+  keeper: string;
+  /**
+   * Merchant's net share after fees, keeper tip and referral.
+   */
+  merchant_amount: bigint;
+  /**
+   * Address receiving the merchant's net share.
+   */
+  payout: string;
+  /**
+   * Referral payment (zero when there is no referrer).
+   */
+  referral: bigint;
+  /**
+   * Referral recipient, if any.
+   */
+  referrer: string | null;
+  /**
+   * Subscriber whose vault balance would be debited.
+   */
+  subscriber: string;
+  /**
+   * Keeper tip.
+   */
+  tip: bigint;
+  /**
+   * Token used for the charge.
    */
   token: string;
 }

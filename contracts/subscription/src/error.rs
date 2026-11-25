@@ -113,7 +113,13 @@ pub enum Error {
     ProtocolPaused = 2039,
     /// Cancellation, an upgrade, or a mandate cap would prevent the mandate
     /// from completing its frozen minimum number of billing periods.
-    MinimumCommitmentNotMet = 2040,
+    /// A refund transfer did not deliver exactly the recorded refund amount,
+    /// so the token is unsafe for exact-amount accounting (for example a
+    /// fee-on-transfer token). The refund is rolled back.
+    UnexpectedTransferAmount = 2040,
+    /// Cancellation, an upgrade, or a mandate cap would prevent the mandate
+    /// from completing its frozen minimum number of billing periods.
+    MinimumCommitmentNotMet = 2041,
 }
 
 impl From<Error> for ErrorCode {
